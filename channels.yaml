@@ -1,0 +1,45 @@
+# 색인 대상 채널과 영상 선정 규칙 (DECISIONS.md ⑤⑥⑦)
+# 목표: 약 150편. 제목은 일본어 원제로 받아서 거른다 (yt-dlp 기본값은 번역된 제목을 줄 수 있음)
+
+official:
+  - name: CUTIE STREET
+    url: https://www.youtube.com/@CUTIE_STREET
+    limit: 60
+  - name: MORE STAR
+    url: https://www.youtube.com/@MORE_STAR1212
+    limit: 30
+  - name: KAWAII LAB.
+    url: https://www.youtube.com/@KAWAII_LAB_OFFICIAL
+    limit: 10
+    # 소속 전 그룹이 섞여 있음 → 제목에 두 그룹이 들어간 것만
+    require_title: ["CUTIE STREET", "きゅーすと", "MORE STAR", "もあすた"]
+
+# 공식 채널: 아래 키워드가 제목에 있으면 제외 (무대·홍보 영상은 장면 묘사로 찾을 일이 적음) → 남은 것을 최신순으로 limit까지
+exclude_title:
+  - MV
+  - Music Video
+  - Teaser
+  - ティザー
+  - LIVE映像
+  - ライブ映像
+  - LIVE Footage
+  - LIVE Performance
+  - Lyric
+  - Dance Practice
+  - 振付
+  - 予告
+
+fan_clips:
+  - name: どさん子いんぬ きゅーすと切り抜き展
+    url: https://www.youtube.com/channel/UCc0vIYWk2cDlrA7JmpkBj_Q
+    limit: 34          # 전부. 설명란에 《元動画》 링크
+  - name: ユウ希のきゅーすとまとめ部屋
+    url: https://www.youtube.com/channel/UCJeoSx9hqbJwG5GWz5U3iJA
+    limit: 30          # 최신순. 설명란에 행사명·날짜
+
+# 색인하지 않음 — 평가 질문 후보(한국어 쇼츠 제목)로만 사용
+query_sources:
+  - name: 일본미녀보관소
+    url: https://www.youtube.com/@일본미녀보관소/shorts
+  - name: 카와이레이더
+    url: https://www.youtube.com/@카와이레이더/shorts
