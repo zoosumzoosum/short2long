@@ -1,0 +1,12 @@
+[project]
+name = "short2long"
+version = "0.1.0"
+description = "한국어 장면 묘사로 일본어 영상의 출처 구간을 찾는 다국어 검색 서비스"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.141.1",
+    "psycopg[binary]>=3.3.6",
+    "pydantic-settings>=2.15.0",
+    "uvicorn[standard]>=0.54.0",
+]

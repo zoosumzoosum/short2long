@@ -1,0 +1,12 @@
+# 비밀 설정
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 데이터 (영상·자막·메타데이터는 로컬에서만)
+data/
+*.vtt
+*.srt
