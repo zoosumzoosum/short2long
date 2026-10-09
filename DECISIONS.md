@@ -77,3 +77,12 @@
 - 버린 대안: 받자마자 특징만 뽑고 삭제(모델을 바꿀 때마다 재다운로드) / 소리만 받기(화면 신호를 못 씀) / 고화질(용량·시간만 늘어남)
 - 함께 정한 것: JS 런타임은 **deno를 PyPI 패키지로** 설치 — Debian의 node v20은 yt-dlp가 인식하지 않았음(경고 지속, 원인은 버전으로 추정). worker는 **uid 1000**으로 실행 — root로 돌면 `data/`의 파일을 내 계정으로 못 지움
 - 보안 수정: httpx의 `raise_for_status()` 에러 메시지에 **API 키가 든 URL**이 그대로 담겨 로그에 남았음 → 상태 코드·이유만 담는 `YouTubeError`로 교체, 남은 로그 삭제
+
+## ⑬ 주문서 리스(lease) + 예정·진행 중 라이브는 다운로드 보류 (2026-10-09, Claude 결정·본인 위임)
+- 문제 (본인 5분 설명 연습 중 발견): worker가 처리 도중 죽으면 주문서가 영원히 `running`. worker는 `pending`만 집고, 부분 유니크 인덱스(⑨) 때문에 같은 주문서를 다시 넣지도 못함
+- 결정: `running`으로 **40분** 넘은 주문서는 worker 시작 시·한가할 때 되돌림 — 시도가 남았으면 `pending`, 상한(3회)을 다 썼으면 `failed`. `error`에 `lease expired`를 남김
+- 이유: 죽는 원인 대부분은 절전·WSL 종료·재시작·메모리 부족처럼 코드 밖 → 자동 복구. 매번 worker를 죽이는 주문서는 상한에서 멈추고 `error`로 골라 디버깅. 40분 = `download_media` timeout(30분)보다 길게 → 살아 있는 작업을 빼앗지 않음
+- 버린 대안: 사람이 SQL로 수동 정리(잊기 쉬움) / heartbeat(처리 중 주기적으로 `updated_at` 갱신 — 정확하지만 스레드가 필요, 지금 규모엔 과함) / 리스를 짧게(긴 다운로드를 죽은 것으로 오판 → 중복 다운로드)
+- 한계: 40분 넘게 정상 처리되는 작업이 생기면(긴 특징 추출 등) 중복 처리될 수 있음 → 그때 heartbeat로
+- 라이브: `fetch_video`에서 `snippet.liveBroadcastContent`가 `upcoming`·`live`면 `download_media`를 넣지 않음(길이 0, 받을 영상이 없음). 끝난 뒤 `fetch_video`를 다시 넣으면 받음
+- 확인 (Claude 실행, 2026-10-09): 가짜 running 주문서 3개 — 50분·1회 → `pending` 후 재처리 / 50분·3회 → `failed` + `lease expired` / 10분 → 그대로. `-NW1fS6CTp0` = API상 `upcoming` → 다운로드 주문서 안 생김
