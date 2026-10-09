@@ -31,5 +31,26 @@ services:
       - ./app:/code/app
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
+  # 수집 worker: api와 같은 이미지, 실행 명령만 다름. 찾아오는 손님이 없으니 ports 없음
+  worker:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      PYTHONDONTWRITEBYTECODE: "1"
+      # print가 버퍼에 쌓이지 않고 바로 docker logs에 보이게
+      PYTHONUNBUFFERED: "1"
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
+      HOME: /tmp  # 내 계정(1000)으로 돌면 컨테이너 안에 홈이 없음 → yt-dlp·deno 캐시를 /tmp에
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./app:/code/app
+      - ./channels.yaml:/code/channels.yaml:ro
+      - ./data:/code/data
+    # data/에 생기는 파일을 root가 아닌 내 계정 소유로 (WSL id -u = 1000)
+    user: "1000:1000"
+    command: ["python", "-m", "app.worker"]
+
 volumes:
   pgdata:

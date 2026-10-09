@@ -5,8 +5,12 @@ description = "한국어 장면 묘사로 일본어 영상의 출처 구간을 �
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "deno>=2.9.7",
     "fastapi>=0.141.1",
+    "httpx>=0.28.1",
     "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.15.0",
+    "pyyaml>=6.0.3",
     "uvicorn[standard]>=0.54.0",
+    "yt-dlp[default]>=2026.8.19",
 ]

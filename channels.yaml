@@ -1,17 +1,31 @@
-# 색인 대상 채널과 영상 선정 규칙 (DECISIONS.md ⑤⑥⑦)
-# 목표: 약 150편. 제목은 일본어 원제로 받아서 거른다 (yt-dlp 기본값은 번역된 제목을 줄 수 있음)
+# 색인 대상 채널과 영상 선정 규칙 (DECISIONS.md ⑤⑥⑦⑪)
+# 제목은 공식 API의 일본어 원제로 거른다
+# 공식 채널은 롱폼과 쇼츠를 따로 고른다 (10-08 확인: CUTIE STREET 쇼츠 3,455편 / 롱폼 513편)
+#   long_limit: 롱폼 최신순 상한 (원본 후보의 중심)
+#   shorts: 멤버별 계층 샘플링 — 멤버마다 per_member편, 멤버 이름이 없는 쇼츠에서 untagged편 (고정 시드로 무작위)
+#   라이브 아카이브는 아직 넣지 않음 (몇 시간짜리 — EDA 후 결정)
 
 official:
   - name: CUTIE STREET
     url: https://www.youtube.com/@CUTIE_STREET
-    limit: 60
+    long_limit: 60
+    shorts:
+      # 쇼츠 제목 해시태그 빈도로 확인 (각 239~299회, 2026-10-08)
+      members: [板倉可奈, 増田彩乃, 佐野愛花, 真鍋凪咲, 古澤里紗, 桜庭遥花, 川本笑瑠, 梅田みゆ]
+      per_member: 8
+      untagged: 20
   - name: MORE STAR
     url: https://www.youtube.com/@MORE_STAR1212
-    limit: 30
+    long_limit: 30
+    shorts:
+      # 해시태그로 확인된 7명 (각 8~10회, 2026-10-08). 9인조라 2명은 미확인 → 태그 없음 층으로 들어감
+      members: [遠藤まりん, 森田あみ, 萩田そら, 中山こはく, 高梨ゆな, 新井心菜, 笹原なな花]
+      per_member: 8
+      untagged: 20
   - name: KAWAII LAB.
     url: https://www.youtube.com/@KAWAII_LAB_OFFICIAL
-    limit: 10
-    # 소속 전 그룹이 섞여 있음 → 제목에 두 그룹이 들어간 것만
+    long_limit: 10
+    # 소속 전 그룹이 섞여 있음 → 제목에 두 그룹이 들어간 것만. 쇼츠는 다른 그룹 위주라 넣지 않음
     require_title: ["CUTIE STREET", "きゅーすと", "MORE STAR", "もあすた"]
 
 # 공식 채널: 아래 키워드가 제목에 있으면 제외 (무대·홍보 영상은 장면 묘사로 찾을 일이 적음) → 남은 것을 최신순으로 limit까지
