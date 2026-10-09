@@ -13,6 +13,7 @@ from app.jobs import add_job
 
 MAX_ATTEMPTS = 3  # 이만큼 실패하면 failed로 두고 더 시도하지 않음
 IDLE_SECONDS = 5  # 할 일이 없을 때 쉬는 시간
+LEASE_MINUTES = 40  # running이 이보다 오래면 worker가 죽은 것으로 봄 (download_media timeout 30분보다 길게)
 
 # 찜 + 상태 변경을 한 문장으로: 다른 worker가 찜한 주문서는 건너뜀 (7강)
 CLAIM_SQL = """
@@ -25,6 +26,16 @@ WHERE id = (
     FOR UPDATE SKIP LOCKED
 )
 RETURNING id, kind, target, attempts
+"""
+
+# 리스: 처리 중 worker가 죽으면 running에 갇힘 → 오래된 running을 되돌림. 상한을 다 썼으면 failed (디버깅 대상)
+RECLAIM_SQL = """
+UPDATE jobs SET
+    status = CASE WHEN attempts >= %(max)s THEN 'failed' ELSE 'pending' END,
+    error = 'lease expired: running ' || %(mins)s || '분 초과 (worker 중단 추정)',
+    updated_at = now()
+WHERE status = 'running' AND updated_at < now() - make_interval(mins => %(mins)s)
+RETURNING id, kind, target, status
 """
 
 
@@ -97,6 +108,11 @@ def fetch_video(conn, video_id):
             youtube.duration_seconds(v["contentDetails"]["duration"]),
         ),
     )
+    live = s.get("liveBroadcastContent", "none")  # 'upcoming'(예정) | 'live'(진행 중) | 'none'
+    if live != "none":
+        # 아직 영상이 없음 (길이 0). 메타데이터만 두고, 끝난 뒤 fetch_video를 다시 넣으면 그때 받음
+        print(f"[fetch_video] {video_id} {live} 라이브 → 다운로드 보류")
+        return
     add_job(conn, "download_media", video_id)  # 메타데이터가 들어가면 다음 단계 주문서
     print(f"[fetch_video] {video_id} {s['title'][:30]}")
 
@@ -157,11 +173,21 @@ def run_one(conn):
     return True
 
 
+def reclaim(conn):
+    """리스가 지난 running 주문서를 되돌리고 로그에 남긴다 (디버깅 단서)"""
+    for job_id, kind, target, status in conn.execute(
+        RECLAIM_SQL, {"max": MAX_ATTEMPTS, "mins": LEASE_MINUTES}
+    ).fetchall():
+        print(f"[job {job_id}] lease expired → {status} ({kind} {target})")
+
+
 def main():
     with psycopg.connect(settings.database_url, autocommit=True) as conn:
         print("worker 시작")
+        reclaim(conn)  # 지난번에 죽으면서 남긴 running 정리
         while True:
             if not run_one(conn):
+                reclaim(conn)  # 한가할 때마다 확인 (다른 worker가 죽었을 수도 있음)
                 time.sleep(IDLE_SECONDS)
 
 
