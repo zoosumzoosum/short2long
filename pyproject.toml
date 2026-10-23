@@ -8,9 +8,15 @@ dependencies = [
     "deno>=2.9.7",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
+    "numpy>=2.0",
+    "scipy>=1.14",
     "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.15.0",
     "pyyaml>=6.0.3",
     "uvicorn[standard]>=0.54.0",
     "yt-dlp[default]>=2026.8.19",
 ]
+
+[dependency-groups]
+# 실험 추적용. 서비스 이미지에는 넣지 않으려고 기본 의존성과 분리 (uv run --group eval)
+eval = ["wandb>=0.19"]
