@@ -10,3 +10,6 @@ __pycache__/
 data/
 *.vtt
 *.srt
+
+# W&B 로컬 실행 기록 (원본은 wandb.ai에)
+wandb/
