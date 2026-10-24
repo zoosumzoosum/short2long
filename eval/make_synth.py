@@ -12,8 +12,15 @@
       sh -c 'DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@<db>:5432/$POSTGRES_DB \\
              python -m eval.make_synth --out data/eval/synth_v1 --seed 1'
 (--user를 주지 않으면 결과 파일이 root 소유가 된다.)
+
+화면 변형 평가셋(4주 차)은 같은 명령에 변형만 바꾼다:
+    python -m eval.make_synth --out data/eval/synth_vis_v1 --seed 1 \\
+        --transforms vcrop zoom overlay mirror frame combo
+(소리 변형 기본 평가셋과 난수 흐름이 섞이지 않도록 새 변형은 별도 목록 VIS_TRANSFORMS에 둔다.
+ combo 외 화면 변형은 소리가 원본 그대로. 질의 mp4의 sha256은 출력 폴더의 sha256.txt.)
 """
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -27,7 +34,12 @@ import psycopg
 
 # 소리 위주(이번 주) 변형 + 화면 변형(4주 차용). 기본은 소리 변형 4개 + crop.
 TRANSFORMS = ["none", "bgm", "noise", "speed", "crop"]
+# 화면만 바꾸는 변형(소리는 원본 그대로) + combo(화면+배경음). 기존 평가셋 재현을 위해 TRANSFORMS는 건드리지 않고 따로 둔다.
+VIS_TRANSFORMS = ["vcrop", "zoom", "overlay", "mirror", "frame", "combo"]
 BGM_REL_DB = (10, 15)  # 배경음이 질의 원본 구간보다 이만큼(dB) 작게
+FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"  # 한글 글리프 없음 → 자막은 영문(ASCII)
+CAPTIONS = ["OMG SO CUTE", "WAIT FOR IT", "best moment ever", "she did that", "WATCH TILL THE END",
+            "so iconic", "can not stop watching", "FANCAM", "legendary stage"]  # 쉼표·콜론 없이(필터 문법 충돌 방지)
 
 
 def run(cmd, stream="stderr"):
@@ -103,6 +115,71 @@ ENC = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]
 
 
+def pick_bgm(src, start, length, rng, all_sources, media_dir):
+    """bgm 변형의 배경음 고르기·세기 맞추기 (combo와 공유). 난수 소비 순서는 원래 bgm 코드와 같다."""
+    others = [c for c in all_sources
+              if c["video_id"] != src.stem and c["duration"] >= length + 1]
+    src_db = segment_volume_db(src, start, length)
+    for _ in range(20):  # 거의 무음인 배경 구간이면 gain이 터무니없이 커지므로 다시 뽑는다
+        other = rng.choice(others)
+        bgm_src = media_dir / f"{other['video_id']}.mp4"
+        o_start = round(rng.uniform(0, other["duration"] - length - 0.5), 3)
+        bgm_db = segment_volume_db(bgm_src, o_start, length)
+        if bgm_db > -50:
+            break
+    else:
+        raise RuntimeError("배경으로 쓸 만한 구간을 못 찾음")
+    target = round(rng.uniform(*BGM_REL_DB), 1)
+    gain = round(src_db - bgm_db - target, 1)
+    rel_db = round(src_db - (bgm_db + gain), 2)  # 실측 세기 기준 실제 차이 (목표차와 반올림 오차만큼 다름)
+    params = {"bgm_video_id": other["video_id"], "bgm_start_sec": o_start,
+              "bgm_gain_db": gain, "target_rel_db": target, "rel_db": rel_db,
+              "src_mean_db": src_db, "bgm_mean_db": bgm_db}
+    return bgm_src, o_start, gain, params
+
+
+def video_size(path):
+    """(폭, 높이). 짝수로 내려서 돌려준다 (x264는 홀수 크기를 못 쓴다)."""
+    out = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+               "stream=width,height", "-of", "csv=p=0", str(path)], stream="stdout")
+    w, h = (int(x) for x in out.strip().split(","))
+    return w // 2 * 2, h // 2 * 2
+
+
+def vcrop_filter(rng):
+    """가로 원본에서 9:16 세로 구간을 (확대 없이) 무작위 위치에서 잘라 360x640으로. 기존 crop과 같은 식, zoom만 1."""
+    fx = round(rng.uniform(0.05, 0.95), 2)
+    fy = round(rng.uniform(0.05, 0.95), 2)
+    w = "min(iw\\,ih*9/16)"
+    h = "min(iw\\,ih*9/16)*16/9"
+    vf = f"crop=w={w}:h={h}:x=(iw-out_w)*{fx}:y=(ih-out_h)*{fy},scale=360:640,setsar=1"
+    return vf, {"x_frac": fx, "y_frac": fy, "out_size": "360x640"}
+
+
+def overlay_filter(rng):
+    """큰 자막 띠(위 또는 아래 15~25%)와 반대편 도형 1~3개를 덧그리는 필터 조각. 해상도에 무관(식으로 표현)."""
+    frac = round(rng.uniform(0.15, 0.25), 2)
+    pos = rng.choice(["top", "bottom"])
+    caption = rng.choice(CAPTIONS)
+    # drawbox는 iw/ih, drawtext는 w/h 라는 이름을 쓴다
+    y_box = "0" if pos == "top" else f"ih*(1-{frac})"
+    y_txt = "0" if pos == "top" else f"h*(1-{frac})"
+    parts = [f"drawbox=x=0:y={y_box}:w=iw:h=ih*{frac}:color=black@0.65:t=fill"]
+    if os.path.exists(FONT):  # 폰트 없으면 drawbox만
+        parts.append(f"drawtext=fontfile={FONT}:text='{caption}':fontcolor=white:fontsize=min(h*{frac}*0.45\\,w*0.9/{len(caption) * 0.65}):"
+                     f"x=(w-text_w)/2:y={y_txt}+(h*{frac}-text_h)/2")
+    shapes = []
+    for _ in range(rng.randint(1, 3)):  # 이모지 대신 색 도형 (폰트에 이모지가 없다)
+        color = rng.choice(["yellow", "red", "hotpink", "cyan"])
+        size = round(rng.uniform(0.06, 0.12), 2)  # 짧은 변 대비
+        fx = round(rng.uniform(0.05, 0.85), 2)
+        # 자막 띠와 겹치지 않게: 위 띠면 세로 0.3~0.65, 아래 띠면 0.1~0.5 구간
+        fy = round(rng.uniform(0.3, 0.65) if pos == "top" else rng.uniform(0.1, 0.5), 2)
+        parts.append(f"drawbox=x=iw*{fx}:y=ih*{fy}:w=min(iw\\,ih)*{size}:h=min(iw\\,ih)*{size}:color={color}@0.9:t=fill")
+        shapes.append({"color": color, "size": size, "x_frac": fx, "y_frac": fy})
+    return ",".join(parts), {"band_pos": pos, "band_frac": frac, "caption": caption, "shapes": shapes}
+
+
 def render(transform, src, start, length, out, rng, all_sources, media_dir, tmpdir):
     """변형 하나를 적용해 out(mp4)을 쓰고, 정해진 변형 인자(params)를 돌려준다."""
     base = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "info"]
@@ -115,21 +192,7 @@ def render(transform, src, start, length, out, rng, all_sources, media_dir, tmpd
         # (섞기 전에 모노로 직접 내린다: ffmpeg 자동 다운믹스는 리샘플과 겹치면 +3dB 커져 SNR·배경음 크기가 틀어졌다)
         # 다른 영상의 소리를 깔되, 세기는 '질의 원본 구간보다 10~15dB 작게' 맞춘다:
         # 두 구간의 평균 세기를 재서 gain = (원본 − 배경) − 목표차 로 계산
-        others = [c for c in all_sources
-                  if c["video_id"] != src.stem and c["duration"] >= length + 1]
-        src_db = segment_volume_db(src, start, length)
-        for _ in range(20):  # 거의 무음인 배경 구간이면 gain이 터무니없이 커지므로 다시 뽑는다
-            other = rng.choice(others)
-            bgm_src = media_dir / f"{other['video_id']}.mp4"
-            o_start = round(rng.uniform(0, other["duration"] - length - 0.5), 3)
-            bgm_db = segment_volume_db(bgm_src, o_start, length)
-            if bgm_db > -50:
-                break
-        else:
-            raise RuntimeError("배경으로 쓸 만한 구간을 못 찾음")
-        target = round(rng.uniform(*BGM_REL_DB), 1)
-        gain = round(src_db - bgm_db - target, 1)
-        rel_db = round(src_db - (bgm_db + gain), 2)  # 실측 세기 기준 실제 차이 (목표차와 반올림 오차만큼 다름)
+        bgm_src, o_start, gain, params = pick_bgm(src, start, length, rng, all_sources, media_dir)
         cmd = (base + cut_args(src, start, length)
                + cut_args(bgm_src, o_start, length)
                + ["-filter_complex",
@@ -137,9 +200,7 @@ def render(transform, src, start, length, out, rng, all_sources, media_dir, tmpd
                   "[s][b]amix=inputs=2:duration=first:normalize=0[a]",
                   "-map", "0:v", "-map", "[a]"] + ENC + [str(out)])
         run(cmd)
-        return {"bgm_video_id": other["video_id"], "bgm_start_sec": o_start,
-                "bgm_gain_db": gain, "target_rel_db": target, "rel_db": rel_db,
-                "src_mean_db": src_db, "bgm_mean_db": bgm_db}
+        return params
 
     if transform == "noise":
         snr = 10
@@ -178,6 +239,60 @@ def render(transform, src, start, length, out, rng, all_sources, media_dir, tmpd
         vf = f"crop=w={w}:h={h}:x=(iw-out_w)*{fx}:y=(ih-out_h)*{fy},scale=360:640,setsar=1"
         run(base + cut_args(src, start, length) + ["-vf", vf] + ENC + [str(out)])
         return {"zoom": zoom, "x_frac": fx, "y_frac": fy, "out_size": "360x640"}
+
+    # ---- 화면 변형: 소리는 -c:a aac로 다시 인코딩만 하고 내용은 원본 그대로 (combo 제외) ----
+    if transform == "vcrop":
+        vf, params = vcrop_filter(rng)
+        run(base + cut_args(src, start, length) + ["-vf", vf] + ENC + [str(out)])
+        return params
+
+    if transform == "zoom":
+        # 가운데 부근을 확대해 원래 크기로 되돌린다 (워터마크·테두리 제거용 재업로드 흉내)
+        z = round(rng.uniform(1.15, 1.4), 2)
+        fx = round(rng.uniform(0.2, 0.8), 2)
+        fy = round(rng.uniform(0.2, 0.8), 2)
+        W, H = video_size(src)
+        vf = (f"crop=w=trunc(iw/{z}/2)*2:h=trunc(ih/{z}/2)*2:x=(iw-out_w)*{fx}:y=(ih-out_h)*{fy},"
+              f"scale={W}:{H},setsar=1")
+        run(base + cut_args(src, start, length) + ["-vf", vf] + ENC + [str(out)])
+        return {"zoom": z, "x_frac": fx, "y_frac": fy, "out_size": f"{W}x{H}"}
+
+    if transform == "overlay":
+        vf, params = overlay_filter(rng)
+        run(base + cut_args(src, start, length) + ["-vf", vf] + ENC + [str(out)])
+        return params
+
+    if transform == "mirror":
+        run(base + cut_args(src, start, length) + ["-vf", "hflip"] + ENC + [str(out)])
+        return {}
+
+    if transform == "frame":
+        # 360x640 세로 캔버스 가운데에 원본을 작게 넣고 남는 곳은 블러 또는 단색으로 (레터박스형 재업로드)
+        s = round(rng.uniform(0.6, 0.95), 2)
+        bg = rng.choice(["blur", "black", "white", "navy"])
+        fit = f"scale=w=trunc(360*{s}/2)*2:h=trunc(640*{s}/2)*2:force_original_aspect_ratio=decrease,setsar=1"
+        if bg == "blur":
+            fc = ("[0:v]split[a][b];[b]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,"
+                  f"boxblur=20:2[bg];[a]{fit}[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]")
+        else:
+            fc = f"[0:v]{fit},pad=360:640:(ow-iw)/2:(oh-ih)/2:color={bg}[v]"
+        run(base + cut_args(src, start, length)
+            + ["-filter_complex", fc, "-map", "[v]", "-map", "0:a"] + ENC + [str(out)])
+        return {"scale": s, "background": bg, "out_size": "360x640"}
+
+    if transform == "combo":
+        # 세로 자르기 + 자막 덧붙이기 + 배경음을 한꺼번에 (소리·화면 둘 다 망가진 어려운 경우)
+        vf, p1 = vcrop_filter(rng)
+        ov, p2 = overlay_filter(rng)
+        bgm_src, o_start, gain, p3 = pick_bgm(src, start, length, rng, all_sources, media_dir)
+        cmd = (base + cut_args(src, start, length) + cut_args(bgm_src, o_start, length)
+               + ["-filter_complex",
+                  f"[0:v]{vf},{ov}[v];"
+                  f"[0:a]{mono_filter(src)}[s];[1:a]{mono_filter(bgm_src)},volume={gain}dB[b];"
+                  "[s][b]amix=inputs=2:duration=first:normalize=0[a]",
+                  "-map", "[v]", "-map", "[a]"] + ENC + [str(out)])
+        run(cmd)
+        return {"vcrop": p1, "overlay": p2, "bgm": p3}
 
     raise ValueError(transform)
 
@@ -219,8 +334,9 @@ def main():
     ap.add_argument("--n-long", type=int, default=50)
     ap.add_argument("--n-fan", type=int, default=35)
     ap.add_argument("--n-short", type=int, default=15)
-    ap.add_argument("--transforms", nargs="+", default=TRANSFORMS, choices=TRANSFORMS,
-                    help="클립마다 하나씩 돌아가며 배정 (기본: 전부)")
+    ap.add_argument("--transforms", nargs="+", default=TRANSFORMS, choices=TRANSFORMS + VIS_TRANSFORMS,
+                    help="클립마다 하나씩 돌아가며 배정 (기본: 소리 변형 5종. 화면 평가셋은 --transforms %s)"
+                    % " ".join(VIS_TRANSFORMS))
     ap.add_argument("--min-len", type=float, default=10)
     ap.add_argument("--max-len", type=float, default=30)
     ap.add_argument("--no-wav", action="store_true", help="16kHz 모노 wav를 만들지 않음")
@@ -262,6 +378,11 @@ def main():
     with open(out / "manifest.jsonl", "w", encoding="utf-8") as f:
         for row in manifest:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    # 파일 변조·재생성 차이를 알아보려고 질의 mp4의 sha256을 따로 적는다 (manifest 형식은 그대로 둔다)
+    with open(out / "sha256.txt", "w", encoding="utf-8") as f:
+        for row in manifest:
+            digest = hashlib.sha256((out / f"{row['query_id']}.mp4").read_bytes()).hexdigest()
+            f.write(f"{digest}  {row['query_id']}.mp4\n")
     for p in tmpdir.iterdir():
         p.unlink()
     tmpdir.rmdir()
