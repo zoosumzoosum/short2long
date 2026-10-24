@@ -12,11 +12,12 @@ import hashlib
 import json
 import math
 
-from eval.score import group_by, read_jsonl, score_queries, summarize
+from eval.score import group_by, read_jsonl, score_queries, single_rows, summarize, summarize_seg
 
 ENTITY = "zoosumzoosum-kookmin-university"  # 본인 혼자인 기본 팀 (W&B는 개인 entity 없이 기본 팀을 줌, 2026-10-12 확인)
 PROJECT = "short2long"
 METRICS = ("R@1", "R@5", "V@1", "V@5", "err_mean", "err_median", "verr_median")
+SEG_METRICS = ("SegR", "seg_wrong", "seg_missing", "seg_extra", "fooled_rate")  # 구간 채점(멀티모달 평가셋 v2)
 
 
 def sha256_file(path):
@@ -56,11 +57,20 @@ def build_summary(rows, results):
             if s[k] is not None:
                 out[k + suffix] = s[k]
 
-    add("", summarize(rows))
-    for t, s in group_by(rows, "transform").items():
+    singles = single_rows(rows)  # R@k/V@k는 정답이 하나인 질의만 (compilation 제외)
+    add("", summarize(singles))
+    for t, s in group_by(singles, "transform").items():
         add(f"/{t}", s)
-    for f, s in group_by(rows, "format").items():
+    for f, s in group_by(singles, "format").items():
         add(f"/format={f}", s)
+    if any(r["kind"] for r in rows):  # 멀티모달 평가셋일 때만 SegR·속은 비율을 올린다
+        def add_seg(suffix, s):
+            for k in SEG_METRICS:
+                if s[k] is not None:
+                    out[k + suffix] = s[k]
+        add_seg("", summarize_seg(rows))
+        for kind, s in group_by(rows, "kind", summarize_seg).items():
+            add_seg(f"/kind={kind}", s)
     lat = [r["latency_ms"] for r in results if r.get("latency_ms") is not None]
     if lat:
         out["latency_p50_ms"] = percentile(lat, 50)
@@ -74,7 +84,9 @@ def query_table_rows(manifest, results, rows):
     out = []
     for m, row in zip(manifest, rows):
         res = by_id.get(m["query_id"])
-        top = max(res["candidates"], key=lambda c: c["score"]) if res and res["candidates"] else None
+        # segments만 낸 결과도 있으므로 후보가 없으면 점수 최고 구간을 1위로 본다
+        cands = (res.get("candidates") or [dict(c, start_sec=c["start"]) for c in res.get("segments") or []]) if res else []
+        top = max(cands, key=lambda c: c["score"]) if cands else None
         out.append([m["query_id"], m["transform"], m["format"], m["source_video_id"], m["start_sec"],
                     top["video_id"] if top else None, top["start_sec"] if top else None,
                     top["score"] if top else None, row["rank"] == 1,
