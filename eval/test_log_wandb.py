@@ -6,6 +6,7 @@ import unittest
 from eval.log_wandb import build_summary, parse_config, percentile, query_table_rows
 from eval.score import group_by, score_queries, summarize
 from eval.test_score import MANIFEST, RESULTS
+from eval.test_score_seg import comp
 
 
 class LogWandbTest(unittest.TestCase):
@@ -44,6 +45,27 @@ class LogWandbTest(unittest.TestCase):
     def test_parse_config(self):
         c = parse_config(["a=1", "b=x", "c=[1,2]"], '{"d": true}')
         self.assertEqual(c, {"d": True, "a": 1, "b": "x", "c": [1, 2]})
+
+
+class SegMetricsTest(unittest.TestCase):
+    def test_seg_metrics_only_for_mm_manifests(self):
+        rows, _ = score_queries(MANIFEST, RESULTS, 3.0)
+        self.assertNotIn("SegR", build_summary(rows, RESULTS))  # 기존 평가셋은 지표 키가 그대로
+
+    def test_seg_and_fooled_keys(self):
+        swap = {"query_id": "s1", "kind": "swap", "transform": "swap", "format": "long", "source_video_id": "A",
+                "start_sec": 10.0, "end_sec": 20.0, "query_dur_sec": 10.0, "audio_decoy": {"video_id": "B", "start_sec": 0}}
+        res = [{"query_id": "s1", "candidates": [{"video_id": "B", "start_sec": 0.0, "score": 1}]},
+               {"query_id": "c1", "segments": [{"q_start": 0, "q_end": 8, "video_id": "A", "start": 100.0, "score": 1}]}]
+        rows, _ = score_queries([swap, comp()], res)
+        s = build_summary(rows, res)
+        self.assertAlmostEqual(s["SegR"], 1 / 4)
+        self.assertEqual(s["fooled_rate"], 1.0)
+        self.assertEqual(s["SegR/kind=compilation"], 1 / 3)
+        self.assertEqual(s["n"], 2)
+        self.assertEqual(s["R@1"], 0.0)  # R@1은 compilation 빼고 swap 1개만
+        t = query_table_rows([swap, comp()], res, rows)  # segments만 낸 결과도 표가 만들어진다
+        self.assertEqual(t[1][5], "A")
 
 
 if __name__ == "__main__":
