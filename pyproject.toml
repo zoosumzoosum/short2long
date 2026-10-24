@@ -20,3 +20,9 @@ dependencies = [
 [dependency-groups]
 # 실험 추적용. 서비스 이미지에는 넣지 않으려고 기본 의존성과 분리 (uv run --group eval)
 eval = ["wandb>=0.19"]
+vis = [
+    "av>=19.0.2",
+    "pillow>=13.0.0",
+    "torch>=2.14.1",
+    "transformers>=5.20.2",
+]

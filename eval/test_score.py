@@ -105,5 +105,17 @@ class DedupAndVideoLevelTest(unittest.TestCase):
         self.assertAlmostEqual(s["verr_median"], 25.5)  # 1위 영상이 맞은 q1(1), q2(50)의 중앙값
 
 
+class VisualTransformNamesTest(unittest.TestCase):
+    def test_new_visual_transforms_get_own_rows(self):
+        # 화면 변형 이름도 변형별 표에 각자 한 줄로 나온다 (이름순 정렬)
+        names = ["vcrop", "zoom", "overlay", "mirror", "frame", "combo"]
+        man = [m(f"q{i}", "A", 0.0, t, "long") for i, t in enumerate(names)]
+        rs = [res("q0", ("A", 0.0, 1))]  # vcrop만 정답, 나머지는 결과 없음
+        t = group_by(score_queries(man, rs)[0], "transform")
+        self.assertEqual(list(t), sorted(names))
+        self.assertEqual(t["vcrop"]["R@1"], 1.0)
+        self.assertEqual(t["combo"]["R@1"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
